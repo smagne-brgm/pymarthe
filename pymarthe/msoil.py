@@ -59,10 +59,10 @@ class MartheSoil():
         # ---- Read existing soil properties
         self.martfile = self.mm.mlfiles['mart'] if martfile is None else martfile
         self.pastpfile = self.mm.mlfiles['pastp'] if pastpfile is None else pastpfile
-        self.mode, self.data = marthe_utils.read_zonsoil_prop(self.martfile, self.pastpfile)
-        self.isteps = np.arange(self.mm.nstep)
         # ---- Soil zone numbers as independant field
         self.zonep = MartheField('zonep', self.mm.mlfiles['zonep'], self.mm, use_imask=False)
+        self.mode, self.data = marthe_utils.read_zonsoil_prop(self.martfile, self.pastpfile)
+        self.isteps = np.arange(self.mm.nstep)
         # ---- Set property style
         self._proptype = 'list'
 
@@ -428,32 +428,64 @@ class MartheSoil():
             with open(out, 'w', encoding=ENCODING) as f:
                 f.write(pastp_content)
 
-
         # ---- Write data in .mart file
         elif 'mart' in self.mode:
 
-            # ---- Fetch actual .mart file content as text
+            lookup = {
+                (row.soilprop.upper(), int(row.zone)): row.value
+                for row in self.data.itertuples()
+            }
+
+            pattern = re.compile(
+                r"/(?P<soil>[A-Z0-9_]+)/ZONE_SOL\s*Z=\s*(?P<zone>\d+)\s*V=(?P<val>[+-]?\d+\.?\d*E[+-]?\d+);"
+            )
+
+            Z_COL = 25
+
+            def repl(match):
+                soil = match.group('soil')
+                zone = int(match.group('zone'))
+                key = (soil, zone)
+
+                if key in lookup:
+                    prefix = f"/{soil}/ZONE_SOL"
+                    spaces = " " * max(1, Z_COL - len(prefix))
+                    return f"{prefix}{spaces}Z={zone:7d}V={lookup[key]:10.4E};"
+                else:
+                    return match.group(0)
+
+            # ---- Read file
             with open(self.martfile, 'r', encoding=ENCODING) as f:
                 mart_content = f.read()
-            # ---- Iterate over each soil DataFrame line
-            for d in self.data.itertuples():
-                # ---- Regex to match
-                re_match = r"\/{0}\/ZONE_SOL\s*Z=\s*{1}V=({2});".format(
-                                                                d.soilprop.upper(),
-                                                                d.zone, 
-                                                                re_num)
-                # ---- Search pattern
-                pattern = r'(\/{0}\/ZONE_SOL\s*Z=\s*{1})(V={2};)'.format(
-                    d.soilprop.upper(),
-                    d.zone,
-                    re_num
-                )
-                # --- Replace inplace in file content
-                mart_content=re.sub(pattern, rf"\1V={d.value:>10.4E};",mart_content)
-            # ---- Write new content
+
+            # ---- Single-pass replacement
+            mart_content = pattern.sub(repl, mart_content)
+
+            # ---- Write file
             out = self.martfile if filename is None else filename
             with open(out, 'w', encoding=ENCODING) as f:
                 f.write(mart_content)
+
+            # # ---- Iterate over each soil DataFrame line
+            # for d in self.data.itertuples():
+            #     # ---- Regex to match
+            #     re_match = r"\/{0}\/ZONE_SOL\s*Z=\s*{1}V=({2});".format(
+            #                                                     d.soilprop.upper(),
+            #                                                     d.zone,
+            #                                                     re_num)
+            #     # ---- Search pattern
+            #     pattern = r'(\/{0}\/ZONE_SOL\s*Z=\s*{1})(V={2};)'.format(
+            #         d.soilprop.upper(),
+            #         d.zone,
+            #         re_num
+            #     )
+            #     # --- Replace inplace in file content
+            #     mart_content=re.sub(pattern, rf"\1V={d.value:>10.4E};",mart_content)
+
+            # # ---- Write new content
+            # out = self.martfile if filename is None else filename
+            # with open(out, 'w', encoding=ENCODING) as f:
+            #     f.write(mart_content)
 
     def __str__(self):
         """
